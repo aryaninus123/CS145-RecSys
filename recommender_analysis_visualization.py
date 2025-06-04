@@ -45,9 +45,37 @@ from simulator import CompetitionSimulator
 from sample_recommenders import (
     RandomRecommender,
     PopularityRecommender,
-    ContentBasedRecommender
+    ContentBasedRecommender, 
+    SVMRecommender, 
 )
 from config import DEFAULT_CONFIG, EVALUATION_METRICS
+
+# Import our custom content-based recommenders
+from content_based_recommenders import KNNRecommender, RandomForestRecommender, DecisionTreeRecommender
+from my_recommender import MyRecommender
+
+# Helper to average a metric from a list of metric dicts
+def get_average_metric(metrics_history_list: List[Dict[str, float]], 
+                       metric_name_in_dict: str, 
+                       default_val: float = np.nan) -> float:
+    if not metrics_history_list:
+        return default_val
+    
+    values = []
+    for iteration_metrics in metrics_history_list:
+        if isinstance(iteration_metrics, dict):
+            values.append(iteration_metrics.get(metric_name_in_dict, default_val))
+        else:
+            # Handle cases where an item in the list might not be a dict (should not happen with current simulator.py)
+            values.append(default_val) 
+            
+    # Filter out default_val if it represents missing data before averaging
+    valid_values = [v for v in values if v is not default_val and not (isinstance(v, float) and np.isnan(v))]
+    
+    if not valid_values: 
+        return default_val
+    return sum(valid_values) / len(valid_values)
+
 
 # Import our custom content-based recommenders
 from content_based_recommenders import KNNRecommender, RandomForestRecommender, DecisionTreeRecommender
