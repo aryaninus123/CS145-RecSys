@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from collections import defaultdict
 import shutil
+from typing import List, Dict
 
 # Cell: Import libraries and set up environment
 """
@@ -30,8 +31,9 @@ plt.rcParams['figure.figsize'] = (14, 8)
 spark = SparkSession.builder \
     .appName("RecSysVisualization") \
     .master("local[*]") \
-    .config("spark.driver.memory", "4g") \
+    .config("spark.driver.memory", "6g") \
     .config("spark.sql.shuffle.partitions", "8") \
+    .config("spark.speculation", "false") \
     .getOrCreate()
 
 # Set log level to warnings only
@@ -47,6 +49,33 @@ from sample_recommenders import (
 )
 from config import DEFAULT_CONFIG, EVALUATION_METRICS
 
+# Import our custom content-based recommenders
+from content_based_recommenders import KNNRecommender, RandomForestRecommender, DecisionTreeRecommender
+from my_recommender import MyRecommender
+
+# Helper to average a metric from a list of metric dicts
+def get_average_metric(metrics_history_list: List[Dict[str, float]], 
+                       metric_name_in_dict: str, 
+                       default_val: float = np.nan) -> float:
+    if not metrics_history_list:
+        return default_val
+    
+    values = []
+    for iteration_metrics in metrics_history_list:
+        if isinstance(iteration_metrics, dict):
+            values.append(iteration_metrics.get(metric_name_in_dict, default_val))
+        else:
+            # Handle cases where an item in the list might not be a dict (should not happen with current simulator.py)
+            values.append(default_val) 
+            
+    # Filter out default_val if it represents missing data before averaging
+    valid_values = [v for v in values if v is not default_val and not (isinstance(v, float) and np.isnan(v))]
+    
+    if not valid_values: 
+        return default_val
+    return sum(valid_values) / len(valid_values)
+
+
 # Cell: Define custom recommender template
 """
 ## MyRecommender Template
@@ -54,92 +83,92 @@ Below is a template class for implementing a custom recommender system.
 Students should extend this class with their own recommendation algorithm.
 """
 
-class MyRecommender:
-    """
-    Template class for implementing a custom recommender.
-    
-    This class provides the basic structure required to implement a recommender
-    that can be used with the Sim4Rec simulator. Students should extend this class
-    with their own recommendation algorithm.
-    """
-    
-    def __init__(self, seed=None):
-        """
-        Initialize recommender.
-        
-        Args:
-            seed: Random seed for reproducibility
-        """
-        self.seed = seed
-        # Add your initialization logic here
-    
-    def fit(self, log, user_features=None, item_features=None):
-        """
-        Train the recommender model based on interaction history.
-        
-        Args:
-            log: Interaction log with user_idx, item_idx, and relevance columns
-            user_features: User features dataframe (optional)
-            item_features: Item features dataframe (optional)
-        """
-        # Implement your training logic here
-        # For example:
-        #  1. Extract relevant features from user_features and item_features
-        #  2. Learn user preferences from the log
-        #  3. Build item similarity matrices or latent factor models
-        #  4. Store learned parameters for later prediction
-        pass
-    
-    def predict(self, log, k, users, items, user_features=None, item_features=None, filter_seen_items=True):
-        """
-        Generate recommendations for users.
-        
-        Args:
-            log: Interaction log with user_idx, item_idx, and relevance columns
-            k: Number of items to recommend
-            users: User dataframe
-            items: Item dataframe
-            user_features: User features dataframe (optional)
-            item_features: Item features dataframe (optional)
-            filter_seen_items: Whether to filter already seen items
-            
-        Returns:
-            DataFrame: Recommendations with user_idx, item_idx, and relevance columns
-        """
-        # Implement your recommendation logic here
-        # For example:
-        #  1. Extract relevant features for prediction
-        #  2. Calculate relevance scores for each user-item pair
-        #  3. Rank items by relevance and select top-k
-        #  4. Return a dataframe with columns: user_idx, item_idx, relevance
-        
-        # Example of a random recommender implementation:
-        # Cross join users and items
-        recs = users.crossJoin(items)
-        
-        # Filter out already seen items if needed
-        if filter_seen_items and log is not None:
-            seen_items = log.select("user_idx", "item_idx")
-            recs = recs.join(
-                seen_items,
-                on=["user_idx", "item_idx"],
-                how="left_anti"
-            )
-        
-        # Add random relevance scores
-        recs = recs.withColumn(
-            "relevance",
-            sf.rand(seed=self.seed)
-        )
-        
-        # Rank items by relevance for each user
-        window = Window.partitionBy("user_idx").orderBy(sf.desc("relevance"))
-        recs = recs.withColumn("rank", sf.row_number().over(window))
-        
-        # Filter top-k recommendations
-        recs = recs.filter(sf.col("rank") <= k).drop("rank")
-        
-        return recs
+# class MyRecommender:
+#     """
+#     Template class for implementing a custom recommender.
+#     
+#     This class provides the basic structure required to implement a recommender
+#     that can be used with the Sim4Rec simulator. Students should extend this class
+#     with their own recommendation algorithm.
+#     """
+#     
+#     def __init__(self, seed=None):
+#         """
+#         Initialize recommender.
+#         
+#         Args:
+#             seed: Random seed for reproducibility
+#         """
+#         self.seed = seed
+#         # Add your initialization logic here
+#     
+#     def fit(self, log, user_features=None, item_features=None):
+#         """
+#         Train the recommender model based on interaction history.
+#         
+#         Args:
+#             log: Interaction log with user_idx, item_idx, and relevance columns
+#             user_features: User features dataframe (optional)
+#             item_features: Item features dataframe (optional)
+#         """
+#         # Implement your training logic here
+#         # For example:
+#         #  1. Extract relevant features from user_features and item_features
+#         #  2. Learn user preferences from the log
+#         #  3. Build item similarity matrices or latent factor models
+#         #  4. Store learned parameters for later prediction
+#         pass
+#     
+#     def predict(self, log, k, users, items, user_features=None, item_features=None, filter_seen_items=True):
+#         """
+#         Generate recommendations for users.
+#         
+#         Args:
+#             log: Interaction log with user_idx, item_idx, and relevance columns
+#             k: Number of items to recommend
+#             users: User dataframe
+#             items: Item dataframe
+#             user_features: User features dataframe (optional)
+#             item_features: Item features dataframe (optional)
+#             filter_seen_items: Whether to filter already seen items
+#             
+#         Returns:
+#             DataFrame: Recommendations with user_idx, item_idx, and relevance columns
+#         """
+#         # Implement your recommendation logic here
+#         # For example:
+#         #  1. Extract relevant features for prediction
+#         #  2. Calculate relevance scores for each user-item pair
+#         #  3. Rank items by relevance and select top-k
+#         #  4. Return a dataframe with columns: user_idx, item_idx, relevance
+#         
+#         # Example of a random recommender implementation:
+#         # Cross join users and items
+#         recs = users.crossJoin(items)
+#         
+#         # Filter out already seen items if needed
+#         if filter_seen_items and log is not None:
+#             seen_items = log.select("user_idx", "item_idx")
+#             recs = recs.join(
+#                 seen_items,
+#                 on=["user_idx", "item_idx"],
+#                 how="left_anti"
+#             )
+#         
+#         # Add random relevance scores
+#         recs = recs.withColumn(
+#             "relevance",
+#             sf.rand(seed=self.seed)
+#         )
+#         
+#         # Rank items by relevance for each user
+#         window = Window.partitionBy("user_idx").orderBy(sf.desc("relevance"))
+#         recs = recs.withColumn("rank", sf.row_number().over(window))
+#         
+#         # Filter top-k recommendations
+#         recs = recs.filter(sf.col("rank") <= k).drop("rank")
+#         
+#         return recs
 
 # Cell: Data Exploration Functions
 """
@@ -386,173 +415,168 @@ This is the main function to run analysis of different recommender systems and v
 
 def run_recommender_analysis():
     """
-    Run an analysis of different recommender systems and visualize the results.
-    This function creates a synthetic dataset, performs EDA, evaluates multiple recommendation
-    algorithms using train-test split, and visualizes the performance metrics.
+    Run the full recommender system analysis pipeline.
+    
+    This function orchestrates data generation, EDA, recommender evaluation,
+    and visualization of results.
     """
-    # Create a smaller dataset for experimentation
-    config = DEFAULT_CONFIG.copy()
-    config['data_generation']['n_users'] = 1000  # Reduced from 10,000
-    config['data_generation']['n_items'] = 200   # Reduced from 1,000
-    config['data_generation']['seed'] = 42       # Fixed seed for reproducibility
+    config = DEFAULT_CONFIG
     
-    # Get train-test split parameters
-    train_iterations = config['simulation']['train_iterations']
-    test_iterations = config['simulation']['test_iterations']
-    
-    print(f"Running train-test simulation with {train_iterations} training iterations and {test_iterations} testing iterations")
-    
-    # Initialize data generator
-    data_generator = CompetitionDataGenerator(
-        spark_session=spark,
-        **config['data_generation']
+    # Data Generation
+    data_generator_config = config["data_generation"]
+    main_data_generator = CompetitionDataGenerator(
+        spark_session=spark, 
+        **data_generator_config
+    )
+    users_df = main_data_generator.generate_users()
+    items_df = main_data_generator.generate_items()
+    initial_history_df = main_data_generator.generate_initial_history(
+        interaction_density=data_generator_config["initial_history_density"]
     )
     
-    # Generate user data
-    users_df = data_generator.generate_users()
-    print(f"Generated {users_df.count()} users")
-    
-    # Generate item data
-    items_df = data_generator.generate_items()
-    print(f"Generated {items_df.count()} items")
-    
-    # Generate initial interaction history
-    history_df = data_generator.generate_initial_history(
-        config['data_generation']['initial_history_density']
-    )
-    print(f"Generated {history_df.count()} initial interactions")
-    
-    # Cell: Exploratory Data Analysis
-    """
-    ## Exploratory Data Analysis
-    Let's explore the generated synthetic data before running the recommenders.
-    """
-    
-    # Perform exploratory data analysis on the generated data
+    # Setup Sim4Rec specific generators from the main data generator instance
+    # These are used by the CompetitionSimulator if it relies on Sim4Rec's internal generation mechanisms
+    # for simulating responses, beyond the initial log.
+    user_sim4rec_generator, item_sim4rec_generator = main_data_generator.setup_data_generators()
+
+    # Exploratory Data Analysis (EDA)
     print("\n=== Starting Exploratory Data Analysis ===")
     explore_user_data(users_df)
     explore_item_data(items_df)
-    explore_interactions(history_df, users_df, items_df)
+    explore_interactions(initial_history_df, users_df, items_df)
     
-    # Set up data generators for simulator
-    user_generator, item_generator = data_generator.setup_data_generators()
+    # Set simulation parameters
+    train_iterations = config["simulation"]["train_iterations"] # Original
+    test_iterations = config["simulation"]["test_iterations"]   # Original
+    # train_iterations = 1  # Reduced for faster testing
+    # test_iterations = 1   # Reduced for faster testing
+    # print(f"INFO: Reduced iterations for faster testing: train={train_iterations}, test={test_iterations}")
     
-    # Cell: Setup and Run Recommenders
-    """
-    ## Recommender Systems Comparison
-    Now we'll set up and evaluate different recommendation algorithms.
-    """
+    # <<<< TEMP MODIFICATION: Force retrain to False for faster testing >>>>
+    config["simulation"]["retrain"] = False
+    print(f"INFO: Overriding simulation config: retrain = {config['simulation']['retrain']}")
+    # <<<< END TEMP MODIFICATION >>>>
     
-    # Initialize recommenders to compare
-    recommenders = [
-        RandomRecommender(seed=42),
-        PopularityRecommender(alpha=1.0, seed=42),
-        ContentBasedRecommender(similarity_threshold=0.0, seed=42),
-        MyRecommender(seed=42)  # Add your custom recommender here
+    # Initialize lists to store results for plotting
+    recommender_names = []
+    avg_metrics_history = defaultdict(list)
+    avg_revenues_history = []
+
+    # Define recommenders to evaluate
+    # Each entry is a tuple: (recommender_instance, name_string)
+    # Ensure price_col_name matches what's used in the simulator and data generator if your models need it explicitly.
+    recommenders_to_evaluate = [
+        # Baseline Recommenders
+        (RandomRecommender(seed=config["data_generation"]["seed"]), "Random"),
+        (PopularityRecommender(seed=config["data_generation"]["seed"]), "Popularity"),
+        (ContentBasedRecommender(seed=config["data_generation"]["seed"], price_col_name='price'), "ContentBased"), # Original sample
+
+        # KNNRecommender Variation
+        (KNNRecommender(n_similar_users=10, metric='cosine', seed=config["data_generation"]["seed"]), "KNN (k=10, cosine)"),
+
+        # RandomForestRecommender Variation
+        (RandomForestRecommender(seed=config["data_generation"]["seed"], n_estimators=50, max_depth=8, price_col_name='price'), "RF (N=50, D=8)"),
+
+        # DecisionTreeRecommender Variation
+        (DecisionTreeRecommender(seed=config["data_generation"]["seed"], max_depth=10, price_col_name='price'), "DT (D=10)"),
+
+        # MyRecommender (Ensemble of KNN, RF, DT)
+        (MyRecommender(seed=config["data_generation"]["seed"], price_col_name='price'), "MyEnsemble (KNN+RF+DT)")
     ]
-    recommender_names = ["Random", "Popularity", "ContentBased", "MyRecommender"]
     
     # Initialize recommenders with initial history
-    for recommender in recommenders:
-        recommender.fit(log=data_generator.history_df, 
-                        user_features=users_df, 
-                        item_features=items_df)
+    # This step might be redundant if simulator's fit is called at the start of each train_test_split
+    # However, it can be useful if a recommender needs a global fit before iterations.
+    print("\nPerforming initial fit for all recommenders...")
+    for recommender_instance, recommender_name in recommenders_to_evaluate:
+        print(f"Initial fit for {recommender_name}...")
+        try:
+            recommender_instance.fit(log=initial_history_df, 
+                                     user_features=users_df, 
+                                     item_features=items_df)
+        except Exception as e:
+            print(f"Error during initial fit for {recommender_name}: {e}")
+            import traceback
+            traceback.print_exc()
+
+
+    results_list = []
     
-    # Evaluate each recommender separately using train-test split
-    results = []
-    
-    for name, recommender in zip(recommender_names, recommenders):
-        print(f"\nEvaluating {name}:")
+    for recommender_instance, recommender_name in recommenders_to_evaluate:
+        print(f"\nEvaluating {recommender_name}:")
         
-        # Clean up any existing simulator data directory for this recommender
-        simulator_data_dir = f"simulator_train_test_data_{name}"
-        if os.path.exists(simulator_data_dir):
-            shutil.rmtree(simulator_data_dir)
-            print(f"Removed existing simulator data directory: {simulator_data_dir}")
-        
-        # Initialize simulator
+        # The CompetitionSimulator might not need a new DataGenerator instance for each recommender
+        # if it primarily uses the initial log_df and the user/item generators for its simulation loop.
+        # The key is that log_df passed to CompetitionSimulator is the *initial* state.
+
+        current_simulator_data_dir = f"simulator_run_data_{recommender_name}"
+        if os.path.exists(current_simulator_data_dir):
+            shutil.rmtree(current_simulator_data_dir)
+            print(f"Cleaned up old simulator data directory: {current_simulator_data_dir}")
+
         simulator = CompetitionSimulator(
-            user_generator=user_generator,
-            item_generator=item_generator,
-            data_dir=simulator_data_dir,
-            log_df=data_generator.history_df,  # PySpark DataFrames don't have copy method
-            conversion_noise_mean=config['simulation']['conversion_noise_mean'],
-            conversion_noise_std=config['simulation']['conversion_noise_std'],
             spark_session=spark,
-            seed=config['data_generation']['seed']
+            user_generator=user_sim4rec_generator, 
+            item_generator=item_sim4rec_generator,
+            log_df=initial_history_df.alias(f"initial_log_for_{recommender_name}"), # Use a fresh alias of the initial log
+            data_dir=current_simulator_data_dir, # Pass a unique data directory
+            conversion_noise_mean=config["simulation"]["conversion_noise_mean"],
+            conversion_noise_std=config["simulation"]["conversion_noise_std"],
+            seed=config["data_generation"]["seed"]
+            # config object itself is not an argument here
         )
         
         # Run simulation with train-test split
+        # Ensure recommender_name is an accepted param by train_test_split in simulator.py if used for internal dir naming
         train_metrics, test_metrics, train_revenue, test_revenue = simulator.train_test_split(
-            recommender=recommender,
+            recommender=recommender_instance,
             train_iterations=train_iterations,
             test_iterations=test_iterations,
-            user_frac=config['simulation']['user_fraction'],
-            k=config['simulation']['k'],
-            filter_seen_items=config['simulation']['filter_seen_items'],
-            retrain=config['simulation']['retrain']
+            # Pass other necessary parameters from config["simulation"] if they are arguments to train_test_split
+            user_frac=config["simulation"]["user_fraction"],
+            k=config["simulation"]["k"],
+            filter_seen_items=config["simulation"]["filter_seen_items"],
+            retrain=config["simulation"]["retrain"]
+            # recommender_name=recommender_name # This was causing issues if not in method signature
         )
         
-        # Calculate average metrics
-        train_avg_metrics = {}
-        for metric_name in train_metrics[0].keys():
-            values = [metrics[metric_name] for metrics in train_metrics]
-            train_avg_metrics[f"train_{metric_name}"] = np.mean(values)
-        
-        test_avg_metrics = {}
-        for metric_name in test_metrics[0].keys():
-            values = [metrics[metric_name] for metrics in test_metrics]
-            test_avg_metrics[f"test_{metric_name}"] = np.mean(values)
-        
         # Store results
-        results.append({
-            "name": name,
-            "train_total_revenue": sum(train_revenue),
-            "test_total_revenue": sum(test_revenue),
-            "train_avg_revenue": np.mean(train_revenue),
-            "test_avg_revenue": np.mean(test_revenue),
-            "train_metrics": train_metrics,
-            "test_metrics": test_metrics,
-            "train_revenue": train_revenue,
-            "test_revenue": test_revenue,
-            **train_avg_metrics,
-            **test_avg_metrics
-        })
+        result_entry = {
+            "name": recommender_name,
+            "train_revenue_trajectory": train_revenue, # train_revenue is train_revenue_history
+            "test_revenue_trajectory": test_revenue,   # test_revenue is test_revenue_history
+            "train_total_revenue": sum(train_revenue) if train_revenue else 0,
+            "test_total_revenue": sum(test_revenue) if test_revenue else 0,
+            "train_avg_revenue": sum(train_revenue) / train_iterations if train_iterations > 0 and train_revenue else 0,
+            "test_avg_revenue": sum(test_revenue) / test_iterations if test_iterations > 0 and test_revenue else 0,
+            "train_metrics_history": train_metrics, # Store the list of dicts
+            "test_metrics_history": test_metrics   # Store the list of dicts
+        }
+
+        # Calculate and store average for each defined metric
+        for metric_key in EVALUATION_METRICS.keys(): 
+            # The keys in EVALUATION_METRICS (e.g., 'precision_at_k') 
+            # should match the keys in the dicts returned by RankingMetrics.evaluate()
+            result_entry[f"train_avg_{metric_key}"] = get_average_metric(train_metrics, metric_key)
+            result_entry[f"test_avg_{metric_key}"] = get_average_metric(test_metrics, metric_key)
         
-        # Print summary for this recommender
-        print(f"  Training Phase - Total Revenue: {sum(train_revenue):.2f}")
-        print(f"  Testing Phase - Total Revenue: {sum(test_revenue):.2f}")
-        performance_change = ((sum(test_revenue) / len(test_revenue)) / (sum(train_revenue) / len(train_revenue)) - 1) * 100
-        print(f"  Performance Change: {performance_change:.2f}%")
+        results_list.append(result_entry)
+
+    results_df = pd.DataFrame(results_list)
+    if not results_df.empty:
+        results_df = results_df.sort_values(by="test_total_revenue", ascending=False)
     
-    # Convert to DataFrame for easy comparison
-    results_df = pd.DataFrame(results)
-    results_df = results_df.sort_values("test_total_revenue", ascending=False).reset_index(drop=True)
-    
-    # Print summary table
     print("\nRecommender Evaluation Results (sorted by test revenue):")
-    summary_cols = ["name", "train_total_revenue", "test_total_revenue", 
-                   "train_avg_revenue", "test_avg_revenue",
-                   "train_precision_at_k", "test_precision_at_k",
-                   "train_ndcg_at_k", "test_ndcg_at_k",
-                   "train_mrr", "test_mrr",
-                   "train_discounted_revenue", "test_discounted_revenue"]
-    summary_cols = [col for col in summary_cols if col in results_df.columns]
-    
-    print(results_df[summary_cols].to_string(index=False))
-    
-    # Cell: Results Visualization
-    """
-    ## Results Visualization
-    Now we'll visualize the performance of the different recommenders.
-    """
+    print(results_df.to_string())
     
     # Generate comparison plots
-    visualize_recommender_performance(results_df, recommender_names)
-    
-    # Generate detailed metrics visualizations
-    visualize_detailed_metrics(results_df, recommender_names)
-    
+    recommender_names_for_plot = [name for _, name in recommenders_to_evaluate] # Get names from the tuples
+    if not results_df.empty:
+        visualize_recommender_performance(results_df, recommender_names_for_plot)
+        visualize_detailed_metrics(results_df, recommender_names_for_plot)
+    else:
+        print("\nNo results to visualize.")
+        
     return results_df
 
 
@@ -596,9 +620,9 @@ def visualize_recommender_performance(results_df, recommender_names):
     
     # Plot discounted revenue comparison (if available)
     plt.subplot(3, 2, 3)
-    if 'train_discounted_revenue' in results_df.columns and 'test_discounted_revenue' in results_df.columns:
-        plt.bar(x - width/2, results_df['train_discounted_revenue'], width, label='Training')
-        plt.bar(x + width/2, results_df['test_discounted_revenue'], width, label='Testing')
+    if 'train_avg_discounted_revenue' in results_df.columns and 'test_avg_discounted_revenue' in results_df.columns:
+        plt.bar(x - width/2, results_df['train_avg_discounted_revenue'], width, label='Training')
+        plt.bar(x + width/2, results_df['test_avg_discounted_revenue'], width, label='Testing')
         plt.xlabel('Recommender')
         plt.ylabel('Avg Discounted Revenue')
         plt.title('Discounted Revenue Comparison')
@@ -612,8 +636,8 @@ def visualize_recommender_performance(results_df, recommender_names):
     
     for i, name in enumerate(results_df['name']):
         # Combined train and test trajectories
-        train_revenue = results_df.iloc[i]['train_revenue']
-        test_revenue = results_df.iloc[i]['test_revenue']
+        train_revenue = results_df.iloc[i]['train_revenue_trajectory']
+        test_revenue = results_df.iloc[i]['test_revenue_trajectory']
         
         # Check if revenue is a scalar (numpy.float64) or a list/array
         if isinstance(train_revenue, (float, np.float64, np.float32, int, np.integer)):
@@ -640,53 +664,55 @@ def visualize_recommender_performance(results_df, recommender_names):
     plt.subplot(3, 2, 5)
     
     # Select metrics to include
-    ranking_metrics = ['precision_at_k', 'ndcg_at_k', 'mrr', 'hit_rate']
-    ranking_metrics = [m for m in ranking_metrics if f'train_{m}' in results_df.columns]
+    ranking_metrics_keys = ['precision_at_k', 'ndcg_at_k', 'mrr', 'hit_rate'] # These are keys from EVALUATION_METRICS
+    # Filter for metrics that are actually present in results_df (with _avg_ prefix)
+    plottable_ranking_metrics = [m for m in ranking_metrics_keys if f'train_avg_{m}' in results_df.columns]
     
     # Create bar groups
-    bar_positions = np.arange(len(ranking_metrics))
-    bar_width = 0.8 / len(results_df)
+    bar_positions = np.arange(len(plottable_ranking_metrics))
+    bar_width = 0.8 / len(results_df) if len(results_df) > 0 else 0.8
     
     for i, (_, row) in enumerate(results_df.iterrows()):
         model_name = row['name']
         offsets = (i - len(results_df)/2 + 0.5) * bar_width
-        metric_values = [row[f'train_{m}'] for m in ranking_metrics]
+        # metric_values = [row[f'train_{m}'] for m in plottable_ranking_metrics]
+        metric_values = [row[f'train_avg_{m}'] for m in plottable_ranking_metrics]
         plt.bar(bar_positions + offsets, metric_values, bar_width, label=model_name, 
                 color=colors[i % len(colors)], alpha=0.7)
     
     plt.xlabel('Metric')
     plt.ylabel('Value')
     plt.title('Ranking Metrics Comparison (Training Phase)')
-    plt.xticks(bar_positions, [m.replace('_', ' ').title() for m in ranking_metrics])
+    plt.xticks(bar_positions, [m.replace('_', ' ').title() for m in plottable_ranking_metrics])
     plt.legend()
     
     # Plot ranking metrics comparison - Testing
     plt.subplot(3, 2, 6)
     
-    # Select metrics to include
-    ranking_metrics = ['precision_at_k', 'ndcg_at_k', 'mrr', 'hit_rate']
-    ranking_metrics = [m for m in ranking_metrics if f'test_{m}' in results_df.columns]
-    
+    # Filter for metrics that are actually present in results_df (with _avg_ prefix)
+    plottable_ranking_metrics_test = [m for m in ranking_metrics_keys if f'test_avg_{m}' in results_df.columns]
+
     # Get best-performing model
-    best_model_idx = results_df['test_total_revenue'].idxmax()
-    best_model_name = results_df.iloc[best_model_idx]['name']
+    best_model_idx = results_df['test_total_revenue'].idxmax() if not results_df.empty and 'test_total_revenue' in results_df.columns else None
+    best_model_name = results_df.iloc[best_model_idx]['name'] if best_model_idx is not None else ""
     
     # Create bar groups
-    bar_positions = np.arange(len(ranking_metrics))
-    bar_width = 0.8 / len(results_df)
+    bar_positions_test = np.arange(len(plottable_ranking_metrics_test))
+    # bar_width is same as above
     
     for i, (_, row) in enumerate(results_df.iterrows()):
         model_name = row['name']
         offsets = (i - len(results_df)/2 + 0.5) * bar_width
-        metric_values = [row[f'test_{m}'] for m in ranking_metrics]
-        plt.bar(bar_positions + offsets, metric_values, bar_width, label=model_name, 
+        # metric_values = [row[f'test_{m}'] for m in plottable_ranking_metrics_test]
+        metric_values = [row[f'test_avg_{m}'] for m in plottable_ranking_metrics_test]
+        plt.bar(bar_positions_test + offsets, metric_values, bar_width, label=model_name, 
                 color=colors[i % len(colors)],
                 alpha=0.7 if model_name != best_model_name else 1.0)
     
     plt.xlabel('Metric')
     plt.ylabel('Value')
     plt.title('Ranking Metrics Comparison (Test Phase)')
-    plt.xticks(bar_positions, [m.replace('_', ' ').title() for m in ranking_metrics])
+    plt.xticks(bar_positions_test, [m.replace('_', ' ').title() for m in plottable_ranking_metrics_test])
     plt.legend()
     
     plt.tight_layout()
@@ -705,91 +731,103 @@ def visualize_detailed_metrics(results_df, recommender_names):
     # Create a figure for metric trajectories
     plt.figure(figsize=(16, 16))
     
-    # Get all available metrics
-    all_metrics = []
-    if len(results_df) > 0 and 'train_metrics' in results_df.columns:
-        first_train_metrics = results_df.iloc[0]['train_metrics'][0]
-        all_metrics = list(first_train_metrics.keys())
+    # Get all available metrics from the first recommender's first iteration
+    all_metric_keys_from_history = []
+    if not results_df.empty and 'train_metrics_history' in results_df.columns:
+        first_train_metrics_history = results_df.iloc[0]['train_metrics_history']
+        if first_train_metrics_history and isinstance(first_train_metrics_history, list) and len(first_train_metrics_history) > 0 and isinstance(first_train_metrics_history[0], dict):
+            all_metric_keys_from_history = list(first_train_metrics_history[0].keys())
     
-    # Select key metrics to visualize
-    key_metrics = ['revenue', 'discounted_revenue', 'precision_at_k', 'ndcg_at_k', 'mrr', 'hit_rate']
-    key_metrics = [m for m in key_metrics if m in all_metrics]
+    # Select key metrics to visualize (these should match keys in the history dicts)
+    # These are typically also the keys in EVALUATION_METRICS
+    key_metrics_to_plot = ['revenue', 'discounted_revenue', 'precision_at_k', 'ndcg_at_k', 'mrr', 'hit_rate']
+    # Filter for those that are actually available from the history
+    key_metrics_to_plot = [m for m in key_metrics_to_plot if m in all_metric_keys_from_history]
     
     # Plot metric trajectories for each key metric
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
     markers = ['o', 's', 'D', '^']
     
-    for i, metric in enumerate(key_metrics):
+    for i, metric_plot_key in enumerate(key_metrics_to_plot):
         if i < 6:  # Limit to 6 metrics to avoid overcrowding
             plt.subplot(3, 2, i+1)
             
-            for j, name in enumerate(results_df['name']):
-                row = results_df[results_df['name'] == name].iloc[0]
+            for j, name_of_recommender in enumerate(results_df['name']):
+                row = results_df[results_df['name'] == name_of_recommender].iloc[0]
                 
-                # Get metric values for training phase
+                # Get metric values for training phase from the history list
                 train_values = []
-                for train_metric in row['train_metrics']:
-                    if metric in train_metric:
-                        train_values.append(train_metric[metric])
+                if 'train_metrics_history' in row and isinstance(row['train_metrics_history'], list):
+                    for train_iteration_metric_dict in row['train_metrics_history']:
+                        if isinstance(train_iteration_metric_dict, dict) and metric_plot_key in train_iteration_metric_dict:
+                            train_values.append(train_iteration_metric_dict[metric_plot_key])
                 
-                # Get metric values for testing phase
+                # Get metric values for testing phase from the history list
                 test_values = []
-                for test_metric in row['test_metrics']:
-                    if metric in test_metric:
-                        test_values.append(test_metric[metric])
+                if 'test_metrics_history' in row and isinstance(row['test_metrics_history'], list):
+                    for test_iteration_metric_dict in row['test_metrics_history']:
+                        if isinstance(test_iteration_metric_dict, dict) and metric_plot_key in test_iteration_metric_dict:
+                            test_values.append(test_iteration_metric_dict[metric_plot_key])
                 
                 # Plot training phase
-                plt.plot(range(len(train_values)), train_values, 
-                         marker=markers[j % len(markers)], 
-                         color=colors[j % len(colors)],
-                         linestyle='-', label=f"{name} (train)")
+                if train_values:
+                    plt.plot(range(len(train_values)), train_values, 
+                             marker=markers[j % len(markers)], 
+                             color=colors[j % len(colors)],
+                             linestyle='-', label=f"{name_of_recommender} (Train)")
                 
-                # Plot testing phase
-                plt.plot(range(len(train_values), len(train_values) + len(test_values)), 
-                         test_values, marker=markers[j % len(markers)], 
-                         color=colors[j % len(colors)],
-                         linestyle='--', label=f"{name} (test)")
-                
-                # Add a vertical line to separate train and test
-                if j == 0:  # Only add the line once
-                    plt.axvline(x=len(train_values)-0.5, color='k', 
-                                linestyle='--', alpha=0.3, label='Train/Test Split')
+                # Plot testing phase (offsetting x-axis)
+                if test_values:
+                    test_x_offset = len(train_values) if train_values else 0
+                    plt.plot(range(test_x_offset, test_x_offset + len(test_values)), test_values, 
+                             marker=markers[j % len(markers)], 
+                             color=colors[j % len(colors)],
+                             linestyle='--', label=f"{name_of_recommender} (Test)")
             
-            # Get metric info from EVALUATION_METRICS
-            if metric in EVALUATION_METRICS:
-                metric_info = EVALUATION_METRICS[metric]
-                metric_name = metric_info['name']
-                plt.title(f"{metric_name} Trajectory")
-            else:
-                plt.title(f"{metric.replace('_', ' ').title()} Trajectory")
-            
-            plt.xlabel('Iteration')
-            plt.ylabel('Value')
-            
-            # Add legend to the last plot only to avoid cluttering
-            if i == len(key_metrics) - 1 or i == 5:
-                plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
+            plt.title(f'{metric_plot_key.replace("_", " ").title()} Trajectory')
+            plt.xlabel('Iteration (Train -> Test)')
+            plt.ylabel(metric_plot_key.replace("_", " ").title())
+            plt.legend()
     
     plt.tight_layout()
-    plt.savefig('recommender_metrics_trajectories.png')
-    print("Detailed metrics visualizations saved to 'recommender_metrics_trajectories.png'")
+    plt.savefig('detailed_metric_trajectories.png')
+    print("Detailed metrics visualizations saved to 'detailed_metric_trajectories.png'")
     
     # Create a correlation heatmap of metrics
     plt.figure(figsize=(14, 12))
     
-    # Extract metrics columns
-    metric_cols = [col for col in results_df.columns if col.startswith('train_') or col.startswith('test_')]
-    metric_cols = [col for col in metric_cols if not col.endswith('_metrics') and not col.endswith('_revenue')]
+    # Extract metrics columns for correlation
+    # We want the single numeric value columns (total revenue, average revenue, average metrics)
+    potential_metric_cols = [col for col in results_df.columns if col.startswith('train_') or col.startswith('test_')]
+    metric_cols_for_corr = []
+    for col in potential_metric_cols:
+        if col.endswith('_trajectory') or col.endswith('_metrics_history'):
+            continue # Skip list-based columns
+        # Keep total revenue, average revenue, and all train_avg_METRIC / test_avg_METRIC
+        if 'total_revenue' in col or 'avg_revenue' in col or col.startswith('train_avg_') or col.startswith('test_avg_'):
+            metric_cols_for_corr.append(col)
+            
+    metric_cols_for_corr = sorted(list(set(metric_cols_for_corr))) # Ensure uniqueness and consistent order
     
-    if len(metric_cols) > 1:
-        correlation_df = results_df[metric_cols].corr()
-        
-        # Plot heatmap
-        sns.heatmap(correlation_df, annot=True, cmap='coolwarm', fmt='.2f', linewidths=0.5)
-        plt.title('Correlation Between Metrics')
-        plt.tight_layout()
-        plt.savefig('metrics_correlation_heatmap.png')
-        print("Metrics correlation heatmap saved to 'metrics_correlation_heatmap.png'")
+    if len(metric_cols_for_corr) > 1:
+        # Ensure all selected columns are indeed numeric before calling .corr()
+        numeric_df_for_corr = results_df[metric_cols_for_corr].apply(pd.to_numeric, errors='coerce')
+        # Drop any columns that could not be fully converted to numeric (e.g., if they unexpectedly contained non-numeric data)
+        numeric_df_for_corr.dropna(axis=1, how='all', inplace=True)
+
+        if len(numeric_df_for_corr.columns) > 1:
+            correlation_df = numeric_df_for_corr.corr()
+            
+            # Plot heatmap
+            sns.heatmap(correlation_df, annot=True, cmap='coolwarm', fmt='.2f', linewidths=0.5)
+            plt.title('Correlation Between Aggregated Metrics') # Updated title
+            plt.tight_layout()
+            plt.savefig('metrics_correlation_heatmap.png')
+            print("Metrics correlation heatmap saved to 'metrics_correlation_heatmap.png'")
+        else:
+            print("Not enough numeric metric columns for correlation heatmap after coercion.")
+    else:
+        print("Not enough metric columns selected for correlation heatmap.")
 
 
 def calculate_discounted_cumulative_gain(recommendations, k=5, discount_factor=0.85):
@@ -831,4 +869,5 @@ When you run this notebook, it will perform the full analysis and visualization.
 """
 
 if __name__ == "__main__":
+    print("Script started...")
     results = run_recommender_analysis() 

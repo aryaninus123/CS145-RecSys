@@ -316,7 +316,9 @@ class CompetitionSimulator:
                 .appName("RecSysCompetition") \
                 .master("local[*]") \
                 .config("spark.driver.memory", "4g") \
+                .config("spark.driver.host", "localhost") \
                 .config("spark.sql.shuffle.partitions", "8") \
+                .config("spark.sql.execution.arrow.pyspark.enabled", "false") \
                 .getOrCreate()
         else:
             self.spark = spark_session
@@ -426,28 +428,28 @@ class CompetitionSimulator:
         users = self.simulator.sample_users(user_frac).cache()
         
         # Get item features (including prices)
-        items = self.simulator.sample_items(1.0).cache() 
+        items = self.simulator.sample_items(1.0).cache()
         
         # Generate recommendations
         recs = recommender.predict(
             log=self.simulator.log,
             k=k,
             users=users,
-            items=items,
+            items=items, 
             user_features=users,
-            item_features=items,
+            item_features=items, 
             filter_seen_items=filter_seen_items
         ).cache()
         
         # Update k for ranking metrics
         self.ranking_evaluator.k = k
         
-        # Simulate user responses
+        # Sample true responses
         true_responses = self.simulator.sample_responses(
             recs_df=recs,
-            user_features=users,
-            item_features=items,
-            action_models=self.response_pipeline
+            action_models=self.response_pipeline,
+            user_features=users, 
+            item_features=items 
         ).cache()
         
         # Calculate basic metrics
@@ -494,8 +496,9 @@ class CompetitionSimulator:
         
         # Clean up
         users.unpersist()
+        items.unpersist() 
         recs.unpersist()
-        true_responses.unpersist()
+        true_responses.unpersist() 
         
         return metrics, total_revenue, true_responses
     
@@ -537,8 +540,8 @@ class CompetitionSimulator:
             # Retrain the recommender if needed
             if retrain and i < n_iterations - 1:
                 # Prepare full users/items feature dataframes for training (use the entire catalog)
-                full_user_features = self.simulator.sample_users(1.0).cache()
-                full_item_features = self.simulator.sample_items(1.0).cache()
+                full_user_features = self.simulator.sample_users(1.0).cache() 
+                full_item_features = self.simulator.sample_items(1.0).cache() 
                 
                 # Check if the log dataframe contains a 'response' column
                 columns = [field.name for field in self.simulator.log.schema.fields]
@@ -579,9 +582,169 @@ class CompetitionSimulator:
                         user_features=full_user_features,
                         item_features=full_item_features
                     )
+                # Unpersist features used for fitting
+                full_user_features.unpersist()
+                full_item_features.unpersist()
         
         return self.metrics_history, self.revenue_history
     
+    def train_test_split(
+        self,
+        recommender,
+        train_iterations=5,
+        test_iterations=5,
+        user_frac=0.1,
+        k=5,
+        filter_seen_items=True,
+        retrain=True
+    ):
+        """
+        Run a simulation with explicit train-test split.
+        First runs train_iterations to build up history and train the recommender,
+        then runs test_iterations to evaluate performance without retraining.
+        
+        Args:
+            recommender: Recommendation algorithm to evaluate
+            train_iterations: Number of iterations to use for training
+            test_iterations: Number of iterations to use for testing
+            user_frac: Fraction of users to sample in each iteration
+            k: Number of items to recommend to each user
+            filter_seen_items: Whether to filter already seen items
+            retrain: Whether to retrain during the training phase
+            
+        Returns:
+            tuple: (train_metrics, test_metrics, train_revenue, test_revenue)
+        """
+        # Reset metrics storage
+        self.metrics_history = []
+        self.revenue_history = []
+        
+        print("Starting Training Phase:")
+        # Training phase
+        train_metrics_history = []
+        train_revenue_history = []
+        
+        for i in range(train_iterations):
+            # Run a single iteration
+            metrics, revenue, true_responses = self.run_iteration(
+                recommender=recommender,
+                user_frac=user_frac,
+                k=k,
+                filter_seen_items=filter_seen_items,
+                iteration=f"train_{i}"
+            )
+            
+            print(f"Training Iteration {i}: Revenue = {revenue:.2f}")
+            
+            # Store training metrics
+            train_metrics_history.append(metrics)
+            train_revenue_history.append(revenue)
+            
+            # Retrain the recommender if needed
+            if retrain and i < train_iterations - 1:
+                # Prepare full users/items feature dataframes for training (use the entire catalog)
+                full_user_features = self.simulator.sample_users(1.0).cache() 
+                full_item_features = self.simulator.sample_items(1.0).cache() 
+                
+                # Check if the log dataframe contains a 'response' column
+                columns = [field.name for field in self.simulator.log.schema.fields]
+                
+                if 'response' in columns:
+                    # If response column exists, use it for training by renaming it to relevance
+                    training_log = self.simulator.log
+                    
+                    # If relevance column also exists, drop it first
+                    if 'relevance' in columns:
+                        training_log = training_log.drop("relevance")
+                    
+                    # Rename response to relevance and ensure it's binary (0 or 1)
+                    training_log = training_log.withColumn(
+                        "relevance", 
+                        sf.when(sf.col("response") > 0, 1).otherwise(0)
+                    ).drop("response")
+                    
+                    # Train the recommender
+                    recommender.fit(
+                        log=training_log,
+                        user_features=full_user_features,
+                        item_features=full_item_features
+                    )
+                else:
+                    # If no response column, check if the existing relevance column needs to be binarized
+                    training_log = self.simulator.log
+                    
+                    # Ensure relevance is binary (0 or 1)
+                    training_log = training_log.withColumn(
+                        "relevance",
+                        sf.when(sf.col("relevance") > 0, 1).otherwise(0)
+                    )
+                    
+                    # Train the recommender
+                    recommender.fit(
+                        log=training_log,
+                        user_features=full_user_features,
+                        item_features=full_item_features
+                    )
+                # Unpersist features used for fitting
+                full_user_features.unpersist()
+                full_item_features.unpersist()
+        
+        # One final retraining using all training data
+        full_user_features_final = self.simulator.sample_users(1.0).cache() 
+        full_item_features_final = self.simulator.sample_items(1.0).cache() 
+
+        columns = [field.name for field in self.simulator.log.schema.fields]
+        training_log = self.simulator.log
+        if 'response' in columns:
+            # If relevance column exists, drop it first
+            if 'relevance' in columns:
+                training_log = training_log.drop("relevance")
+            
+            # Rename response to relevance and ensure it's binary (0 or 1)
+            training_log = training_log.withColumn(
+                "relevance", 
+                sf.when(sf.col("response") > 0, 1).otherwise(0)
+            ).drop("response")
+        else:
+            # Ensure relevance is binary (0 or 1)
+            training_log = training_log.withColumn(
+                "relevance",
+                sf.when(sf.col("relevance") > 0, 1).otherwise(0)
+            )
+
+        # Train the recommender one last time on all training data
+        recommender.fit(
+            log=training_log,
+            user_features=full_user_features_final,
+            item_features=full_item_features_final
+        )
+        # Unpersist features used for final fitting
+        full_user_features_final.unpersist()
+        full_item_features_final.unpersist()
+        
+        print("\nStarting Testing Phase:")
+        # Testing phase (no retraining)
+        test_metrics_history = []
+        test_revenue_history = []
+        
+        for i in range(test_iterations):
+            # Run a single iteration
+            metrics, revenue, true_responses = self.run_iteration(
+                recommender=recommender,
+                user_frac=user_frac,
+                k=k,
+                filter_seen_items=filter_seen_items,
+                iteration=f"test_{i}"
+            )
+            
+            print(f"Testing Iteration {i}: Revenue = {revenue:.2f}")
+            
+            # Store testing metrics
+            test_metrics_history.append(metrics)
+            test_revenue_history.append(revenue)
+        
+        return train_metrics_history, test_metrics_history, train_revenue_history, test_revenue_history
+        
     def compare_recommenders(
         self,
         recommenders,
@@ -651,157 +814,6 @@ class CompetitionSimulator:
         
         return results_df
     
-    def train_test_split(
-        self,
-        recommender,
-        train_iterations=5,
-        test_iterations=5,
-        user_frac=0.1,
-        k=5,
-        filter_seen_items=True,
-        retrain=True
-    ):
-        """
-        Run a simulation with explicit train-test split.
-        First runs train_iterations to build up history and train the recommender,
-        then runs test_iterations to evaluate performance without retraining.
-        
-        Args:
-            recommender: Recommendation algorithm to evaluate
-            train_iterations: Number of iterations to use for training
-            test_iterations: Number of iterations to use for testing
-            user_frac: Fraction of users to sample in each iteration
-            k: Number of items to recommend to each user
-            filter_seen_items: Whether to filter already seen items
-            retrain: Whether to retrain during the training phase
-            
-        Returns:
-            tuple: (train_metrics, test_metrics, train_revenue, test_revenue)
-        """
-        # Reset metrics storage
-        self.metrics_history = []
-        self.revenue_history = []
-        
-        print("Starting Training Phase:")
-        # Training phase
-        train_metrics_history = []
-        train_revenue_history = []
-        
-        for i in range(train_iterations):
-            # Run a single iteration
-            metrics, revenue, true_responses = self.run_iteration(
-                recommender=recommender,
-                user_frac=user_frac,
-                k=k,
-                filter_seen_items=filter_seen_items,
-                iteration=f"train_{i}"
-            )
-            
-            print(f"Training Iteration {i}: Revenue = {revenue:.2f}")
-            
-            # Store training metrics
-            train_metrics_history.append(metrics)
-            train_revenue_history.append(revenue)
-            
-            # Retrain the recommender if needed
-            if retrain and i < train_iterations - 1:
-                # Prepare full users/items feature dataframes for training (use the entire catalog)
-                full_user_features = self.simulator.sample_users(1.0)
-                full_item_features = self.simulator.sample_items(1.0)
-                
-                # Check if the log dataframe contains a 'response' column
-                columns = [field.name for field in self.simulator.log.schema.fields]
-                
-                if 'response' in columns:
-                    # If response column exists, use it for training by renaming it to relevance
-                    training_log = self.simulator.log
-                    
-                    # If relevance column also exists, drop it first
-                    if 'relevance' in columns:
-                        training_log = training_log.drop("relevance")
-                    
-                    # Rename response to relevance and ensure it's binary (0 or 1)
-                    training_log = training_log.withColumn(
-                        "relevance", 
-                        sf.when(sf.col("response") > 0, 1).otherwise(0)
-                    ).drop("response")
-                    
-                    # Train the recommender
-                    recommender.fit(
-                        log=training_log,
-                        user_features=full_user_features,
-                        item_features=full_item_features
-                    )
-                else:
-                    # If no response column, check if the existing relevance column needs to be binarized
-                    training_log = self.simulator.log
-                    
-                    # Ensure relevance is binary (0 or 1)
-                    training_log = training_log.withColumn(
-                        "relevance",
-                        sf.when(sf.col("relevance") > 0, 1).otherwise(0)
-                    )
-                    
-                    # Train the recommender
-                    recommender.fit(
-                        log=training_log,
-                        user_features=full_user_features,
-                        item_features=full_item_features
-                    )
-        
-        # One final retraining using all training data
-        full_user_features_final = self.simulator.sample_users(1.0)
-        full_item_features_final = self.simulator.sample_items(1.0)
-
-        columns = [field.name for field in self.simulator.log.schema.fields]
-        training_log = self.simulator.log
-        if 'response' in columns:
-            # If relevance column exists, drop it first
-            if 'relevance' in columns:
-                training_log = training_log.drop("relevance")
-            
-            # Rename response to relevance and ensure it's binary (0 or 1)
-            training_log = training_log.withColumn(
-                "relevance", 
-                sf.when(sf.col("response") > 0, 1).otherwise(0)
-            ).drop("response")
-        else:
-            # Ensure relevance is binary (0 or 1)
-            training_log = training_log.withColumn(
-                "relevance",
-                sf.when(sf.col("relevance") > 0, 1).otherwise(0)
-            )
-
-        # Train the recommender one last time on all training data
-        recommender.fit(
-            log=training_log,
-            user_features=full_user_features_final,
-            item_features=full_item_features_final
-        )
-        
-        print("\nStarting Testing Phase:")
-        # Testing phase (no retraining)
-        test_metrics_history = []
-        test_revenue_history = []
-        
-        for i in range(test_iterations):
-            # Run a single iteration
-            metrics, revenue, true_responses = self.run_iteration(
-                recommender=recommender,
-                user_frac=user_frac,
-                k=k,
-                filter_seen_items=filter_seen_items,
-                iteration=f"test_{i}"
-            )
-            
-            print(f"Testing Iteration {i}: Revenue = {revenue:.2f}")
-            
-            # Store testing metrics
-            test_metrics_history.append(metrics)
-            test_revenue_history.append(revenue)
-        
-        return train_metrics_history, test_metrics_history, train_revenue_history, test_revenue_history
-        
     def compare_recommenders_with_train_test_split(
         self,
         recommenders,

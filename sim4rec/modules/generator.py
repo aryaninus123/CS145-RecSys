@@ -9,7 +9,7 @@ import torch
 import pyspark.sql.types as st
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as sf
-from sdv.tabular import CopulaGAN, CTGAN, GaussianCopula, TVAE
+from sdv.single_table import GaussianCopulaSynthesizer, CTGANSynthesizer, TVAESynthesizer, CopulaGANSynthesizer
 
 from sim4rec.utils.session_handler import State
 from sim4rec.params import (
@@ -175,15 +175,15 @@ class SDVDataGenerator(GeneratorBase, HasParallelizationLevel, HasDevice):
     """
     Synthetic data generator with a bunch of models from SDV library
     """
-    _model : Optional[Union[CopulaGAN, CTGAN, GaussianCopula, TVAE]] = None
+    _model : Optional[Union[CopulaGANSynthesizer, CTGANSynthesizer, GaussianCopulaSynthesizer, TVAESynthesizer]] = None
 
     SEED_COLUMN_NAME = '__seed'
 
     _sdv_model_dict = {
-        'copulagan' : CopulaGAN,
-        'ctgan' : CTGAN,
-        'gaussiancopula' : GaussianCopula,
-        'tvae' : TVAE
+        'copulagan' : CopulaGANSynthesizer,
+        'ctgan' : CTGANSynthesizer,
+        'gaussiancopula' : GaussianCopulaSynthesizer,
+        'tvae' : TVAESynthesizer
     }
 
     # pylint: disable=too-many-arguments
@@ -227,8 +227,9 @@ class SDVDataGenerator(GeneratorBase, HasParallelizationLevel, HasDevice):
         :param df: Dataframe to fit on
         """
 
-        model_params = {'cuda' : self.getDevice()}\
-            if self._model_name != 'gaussiancopula' else {}
+        model_params = {}
+        if self._model_name != 'gaussiancopula':
+            model_params = {'device': self.getDevice()}
 
         self._model = self._sdv_model_dict[self._model_name](**model_params)
 
@@ -258,7 +259,7 @@ class SDVDataGenerator(GeneratorBase, HasParallelizationLevel, HasDevice):
         super().setDevice(value)
 
         if self._model_name != 'gaussiancopula' and self._fit_called:
-            self._model._model.set_device(torch.device(value))
+            self._model.set_device(value)
 
     def generate(
         self,
@@ -304,7 +305,7 @@ class SDVDataGenerator(GeneratorBase, HasParallelizationLevel, HasDevice):
                 seed = hash(pdf[seed_col][0]) & 0xffffffff
                 set_sdv_seed(seed)
 
-                sampled_df = model.sample(len(pdf), output_file_path='disable')
+                sampled_df = model.sample(num_rows=len(pdf))
                 yield pd.concat([pdf.drop(columns=seed_col), sampled_df], axis=1)
 
         set_sdv_seed()

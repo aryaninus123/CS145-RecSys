@@ -15,7 +15,7 @@ from pyspark.ml.evaluation import (
     MulticlassClassificationEvaluator
 )
 
-from sdv.evaluation import evaluate
+from sdmetrics.reports.single_table import QualityReport
 
 
 def evaluate_synthetic(
@@ -26,35 +26,26 @@ def evaluate_synthetic(
     Evaluates the quality of synthetic data against real. The following
     metrics will be calculated:
 
-    - LogisticDetection: The metric evaluates how hard it is to distinguish the synthetic
-    data from the real data by using a Logistic regression model
-    - SVCDetection: The metric evaluates how hard it is to distinguish the synthetic data
-    from the real data by using a C-Support Vector Classification model
-    - KSTest: This metric uses the two-sample Kolmogorov-Smirnov test to compare
-    the distributions of continuous columns using the empirical CDF
-    - ContinuousKLDivergence: This approximates the KL divergence by binning the continuous values
-    to turn them into categorical values and then computing the relative entropy
+    - Column Shapes: Evaluates how well the synthetic data matches the shape of the real data
+    - Column Pair Trends: Evaluates how well the synthetic data captures relationships between columns
+    - Properties: Evaluates statistical properties of the synthetic data
 
     :param synth_df: Synthetic data without any identifiers
     :param real_df: Real data without any identifiers
     :return: Dictionary with metrics on synthetic data quality
     """
 
-    result = evaluate(
-        synthetic_data=synth_df.toPandas(),
+    report = QualityReport()
+    report.generate(
         real_data=real_df.toPandas(),
-        metrics=[
-            'LogisticDetection',
-            'SVCDetection',
-            'KSTest',
-            'ContinuousKLDivergence'
-        ],
-        aggregate=False
+        synthetic_data=synth_df.toPandas()
     )
 
+    metrics = report.get_metrics()
     return {
-        row['metric'] : row['normalized_score']
-        for _, row in result.iterrows()
+        'column_shapes': metrics['Column Shapes']['Score'],
+        'column_pair_trends': metrics['Column Pair Trends']['Score'],
+        'properties': metrics['Properties']['Score']
     }
 
 
