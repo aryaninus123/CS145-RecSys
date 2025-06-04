@@ -77,33 +77,6 @@ def get_average_metric(metrics_history_list: List[Dict[str, float]],
     return sum(valid_values) / len(valid_values)
 
 
-# Import our custom content-based recommenders
-from content_based_recommenders import KNNRecommender, RandomForestRecommender, DecisionTreeRecommender
-from my_recommender import MyRecommender
-
-# Helper to average a metric from a list of metric dicts
-def get_average_metric(metrics_history_list: List[Dict[str, float]], 
-                       metric_name_in_dict: str, 
-                       default_val: float = np.nan) -> float:
-    if not metrics_history_list:
-        return default_val
-    
-    values = []
-    for iteration_metrics in metrics_history_list:
-        if isinstance(iteration_metrics, dict):
-            values.append(iteration_metrics.get(metric_name_in_dict, default_val))
-        else:
-            # Handle cases where an item in the list might not be a dict (should not happen with current simulator.py)
-            values.append(default_val) 
-            
-    # Filter out default_val if it represents missing data before averaging
-    valid_values = [v for v in values if v is not default_val and not (isinstance(v, float) and np.isnan(v))]
-    
-    if not valid_values: 
-        return default_val
-    return sum(valid_values) / len(valid_values)
-
-
 # Cell: Define custom recommender template
 """
 ## MyRecommender Template
@@ -497,7 +470,7 @@ def run_recommender_analysis():
         # Baseline Recommenders
         (RandomRecommender(seed=config["data_generation"]["seed"]), "Random"),
         (PopularityRecommender(seed=config["data_generation"]["seed"]), "Popularity"),
-        (ContentBasedRecommender(seed=config["data_generation"]["seed"], price_col_name='price'), "ContentBased"), # Original sample
+        (ContentBasedRecommender(seed=config["data_generation"]["seed"]), "ContentBased"), # Original sample - removed price_col_name
 
         # KNNRecommender Variation
         (KNNRecommender(n_similar_users=10, metric='cosine', seed=config["data_generation"]["seed"]), "KNN (k=10, cosine)"),
