@@ -59,6 +59,7 @@ from transformer_recommender import TransformerRecommender
 from gcn_recommender import GCNRecommender
 from graph_sage_recommender import GraphSageRecommender
 from graph_attention_recommender import GraphAttentionRecommender
+from ar_recommender import ARRecommender  
 from config import DEFAULT_CONFIG, EVALUATION_METRICS
 
 # Cell: Define custom recommender template
@@ -376,12 +377,13 @@ def run_recommender_analysis():
         RandomRecommender(seed=42),
         PopularityRecommender(alpha=1.0, seed=42),
         ContentBasedRecommender(similarity_threshold=0.0, seed=42),
+        ARRecommender(debug=False),
         #TransformerRecommender(),
         GCNRecommender(),
         GraphSageRecommender(),
         GraphAttentionRecommender()
     ]
-    recommender_names = ["SVM", "Random", "Popularity", "ContentBased", "GCN", "GraphSage", "GAT"]
+    recommender_names = ["SVM", "Random", "Popularity", "ContentBased", "AR", "GCN", "GraphSage", "GAT"]
     
     # Initialize recommenders with initial history
     for recommender in recommenders:
